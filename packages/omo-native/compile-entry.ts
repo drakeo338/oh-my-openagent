@@ -30,6 +30,7 @@ import { detectHarnesses, needsSetupSuggestion } from "./bin/lib/setup-detect.js
 import { printSetupReport } from "./bin/lib/setup-report.js"
 import { isInternalSupervisorLaunch, runInternalSupervisor } from "./supervisor-fast-path"
 import { registerEngineRuntimeModules } from "./engine-runtime-modules"
+import { buildSenpiArgs, shouldPrintCompiledBanner } from "./compile-args"
 import { spawnSync } from "node:child_process"
 import { delimiter } from "node:path"
 import {
@@ -50,24 +51,12 @@ import { pruneMissingStoreIndexEntriesSync } from "../senpi-task/src/runners/rpc
 //    $bunfs. Do NOT refactor these two literals into an indirection.
 // Probe receipts: .omo/evidence/20260825-bun-compile-release-binaries/
 
-const earlyCommands = new Set(["install", "remove", "list", "config", "auth", "app-server", "host"])
+export { buildSenpiArgs, shouldPrintCompiledBanner } from "./compile-args"
 const doctorArtifacts = [
   ["plugin manifest", "plugin/package.json"],
   ["extension", "plugin/extensions/omo.js"],
   ["lsp-daemon runtime", "plugin/runtime/lsp-daemon/dist/cli.js"],
 ] as const
-
-export function buildSenpiArgs(args: string[], execDir: string): string[] {
-  const command = args[0]
-  // Same placement as the launcher: app-server only reads --extension after its subcommand.
-  if (command === "app-server") return args.includes("--no-extensions") ? args : [...args, "--extension", join(execDir, "plugin")]
-  if (earlyCommands.has(command) || command === "update") return args
-  // `--no-extensions` is the caller owning the extension list: a memory child lists none and an
-  // RPC task child lists this plugin itself, so injecting it here would load the plugin into a
-  // bare child or load it twice.
-  if (args.includes("--no-extensions")) return args
-  return ["--extension", join(execDir, "plugin"), ...args]
-}
 
 export function versionLine(
   packageJson: { version: string; omoBuild?: unknown; engineBuild?: unknown },
@@ -213,17 +202,6 @@ export function compiledBannerLines(manifest: Pick<EmbeddedManifest, "omoAiVersi
   return info === undefined ? [releaseBanner(manifest.omoAiVersion)] : versionLines(info)
 }
 
-export function shouldPrintCompiledBanner(args: string[], stderrIsTTY: boolean): boolean {
-  if (!stderrIsTTY) return false
-  if (args.includes("-p") || args.includes("--print") || args.includes("--mode")) return false
-  const command = args[0]
-  if (command === undefined) return true
-  if (earlyCommands.has(command)) return false
-  if (command === "update" || command === "doctor" || command === "setup" || command === "ulw-loop") return false
-  if (command === "--version" || command === "-v") return false
-  return true
-}
-
 type CompiledRollbackMigrationRequest =
   | {
       readonly operation?: "migrate"
@@ -256,7 +234,10 @@ function compiledRollbackMigration() {
   }
 }
 
-export async function runCompiledLauncher(args: string[], execDir: string, enginePin = "unknown", compiledPackageRoot?: string, migration: MigrationOptions = {}): Promise<boolean> {
+/** Test seam: the thread SDK `omo daemon adopt` locates and releases through (the plugin's by default). */
+type CompiledLauncherSeams = { readonly threadSdk?: (options: Record<string, unknown>) => Promise<{ sdk?: unknown; error?: string }> }
+
+export async function runCompiledLauncher(args: string[], execDir: string, enginePin = "unknown", compiledPackageRoot?: string, migration: MigrationOptions = {}, seams: CompiledLauncherSeams = {}): Promise<boolean> {
   const packageJson = readJson(join(execDir, "package.json")) as { version: string; omoBuild?: unknown }
   migrateLegacyBunGlobalManifest(execDir)
   adoptLegacyFlatState()
@@ -300,6 +281,7 @@ export async function runCompiledLauncher(args: string[], execDir: string, engin
       stdout: process.stdout,
       stderr: process.stderr,
       platform: process.platform,
+      ...(seams.threadSdk === undefined ? {} : { threadSdk: seams.threadSdk }),
     })
     if (typeof outcome === "object" && "launch" in outcome) {
       // `omo daemon adopt`: the released session resumes here as a normal launch, in its own directory.
