@@ -1,3 +1,7 @@
+## 2026-09-30 - `omo daemon attach` is removed with the engine's shared-host join (#9143)
+
+senpi 2026.9.29-4 removed the interactive shared-host join, so the environment `omo daemon attach` printed (`OMO_ENABLE_SHARED_HOST=1` plus `OMO_RPC_SOCKET`) and its `attach <launch args>` passthrough no longer put a terminal on a host. `attach` is gone from `daemon.js` (subcommand set, usage, engine mapping, `attachEnv`), from `daemon-args.js` (`attachLaunchArgs` and the flag sets only it read) and from the launcher's passthrough branch; `omo daemon attach` now exits 2 with the unknown-subcommand usage on stderr, prints nothing on stdout and never calls the engine. `omo daemon run` still ensures the operator daemon on `rpc.sock`, and `status`, `stop`, `handoff`, `gc` and `rollback-prepare` are unchanged. `docs/reference/omo-daemon.md` and the package AGENTS.md drop the attach rows, and the dependency-audit sandbox stops setting the two shared-host variables. `test/daemon.test.ts` replaces the four attach cases with one that pins the usage exit, the empty stdout and the untouched engine.
+
 ## 2026-09-29 - A umask 002 install no longer breaks every process child and team; a refused launch spec names itself (#9208)
 
 npm and bun extract `plugin/daemon-launch-spec.json` with the installing user's umask, so under `umask 002` (the Ubuntu
